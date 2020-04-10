@@ -3,6 +3,7 @@ const bodyParser = require("body-parser");
 const SHA256 = require("crypto-js/sha256");
 const CryptoJS = require("crypto-js");
 
+/////////////////////////////////////////MONGO DB///////////////////////////////////////
 //init app
 const app = express();
 
@@ -15,47 +16,33 @@ const url = "mongodb://localhost:27017";
 const dbName = "govDB";
 // Create a new MongoClient
 const client = new MongoClient(url);
+
+//connect to MongoDB
+const connect = async function (client) {
+  await client.connect();
+  console.log("Connected correctly to server");
+};
+
 //we want to see if this user is a valid candidate vote before adding him into second table
-const findDocuments = function (db, id, callback) {
+const findDocuments = async function (db, id, collectionId) {
   // Get the documents collection
-  const collection = db.collection("voters");
-  // Find some documents
-  collection.find({ _id: id }).toArray(function (err, docs) {
-    //assert.equal(err, null);
-    console.log("Found the following records in Voters");
-    console.log(docs);
-    callback(docs);
-  });
+  const collection = db.collection(collectionId);
+  // Find document
+  const doc = await collection.findOne({ _id: id });
+  console.log(doc, "query outcome in 'Voters'");
+  return doc;
 };
-//检查是否已经注册在db1
-const findDocumentsIndb1 = function (db, id, callback) {
+
+//insert
+const insertOne = async function (db, data, collectionId) {
   // Get the documents collection
-  const collection = db.collection("db1");
-  // Find some documents
-  collection.find({ _id: id }).toArray(function (err, docs) {
-    //assert.equal(err, null);
-    console.log("Found the following records in DB1");
-    console.log(docs);
-    callback(docs);
-  });
-};
-//如果通过db1的检测，直接insert to db2
-const insertOneTodb2 = function (db, hash, eth, callback) {
-  // Get the documents collection
-  const collection = db.collection("db2");
+  const collection = db.collection(collectionId);
   // Insert some documents
-  collection.insertOne(
-    {
-      _id: hash,
-      eth: eth,
-    },
-    function (err, result) {
-      assert.equal(err, null);
-      console.log("Successfully create one in db3");
-      callback(result);
-    }
-  );
+  let r = await collection.insertOne(data);
+  return r;
 };
+////////////////////////////////////////MONGO DB////////////////////////////////////////////
+
 //css file
 app.use(express.static(__dirname + "/public"));
 //body parser
@@ -74,59 +61,57 @@ app.get("/fail", function (req, res) {
 });
 
 //post
-app.post("/", function (req, res) {
+app.post("/", async function (req, res) {
   //if password ！= repassword return fail
   if (req.body.password != req.body.repassword) {
     res.redirect("/fail");
   } else {
-    let hash = SHA256(req.body.password).toString(CryptoJS.enc.Base64);
-    console.log(hash);
-
-    //turn string to number
     let sinNumber = Number(req.body.sinNumber);
-    // Use connect method to connect to the mongodb Server and query
-    client.connect(function (err) {
-      assert.equal(null, err);
-      console.log("Connected successfully to server");
-
-      const db = client.db(dbName);
-      let doc = "";
-      //检查是否存在与政府网站
-      findDocuments(db, sinNumber, function (docs) {
-        doc = docs;
-
-        if (doc.length != 0) {
-          
-          let doc1 = "";
-          //检查是否已经注册于db1
-          findDocumentsIndb1(db, sinNumber, function (docs1) {
-            doc1 = docs1;
-            //未注册，直接插入db2
-            if (doc.length != 0) {
-                //hash(id+name+passward)
-              let hashString =
-                req.body.sinNumber + req.body.name + req.body.password;
-              let hash = SHA256(hashString).toString(CryptoJS.enc.Base64);
-                //表单传参
-              let eth = req.body.ethNumber;
-              let doc2 = "";
-              insertOneTodb2(db, hash, eth, function (docs2) {
-                doc2 = docs2;
-                console.log(doc2);
-                res.redirect("/success");
-                client.close();
-              });
-            } else {
-              res.redirect("/fail");
-              client.close();
-            }
-          });
-        } else {
-          res.redirect("/fail");
-          client.close();
-        }
-      });
-    });
+    let name = req.body.name;
+    let password = req.body.password;
+    let eth = req.body.ethNumber;
+    //hash for db1
+    let hashDB1 = SHA256(password).toString(CryptoJS.enc.Base64);
+    //hash(id+name+passward)
+    let hashString = sinNumber + name + password;
+    // Hash for db2
+    let hashDB2 = SHA256(hashString).toString(CryptoJS.enc.Base64);
+    //MongoDB successfully connected
+    await connect(client);
+    const db = client.db(dbName);
+    let docInVoters = await findDocuments(db, sinNumber, "voters");
+    console.log(docInVoters);
+    console.log(typeof docInVoters);
+    //if there is no record in 'Voters'
+    if (docInVoters === null) {
+      // Close connection
+      client.close();
+      res.redirect("/fail");
+    }
+    //query db1
+    let docInVoterdb1 = await findDocuments(db, sinNumber, "db1");
+    //if already registered
+    if (docInVoterdb1 != null) {
+      // Close connection
+      console.log("User exist in db1");
+      client.close();
+      res.redirect("/fail");
+    } else {
+      let data1 = {
+        _id: sinNumber,
+        name: name,
+        hash: hashDB1,
+      };
+      insertOne(db, data1, "db1").then(r => console.log(r.ops,"ciasnvganicwvhiegashfclnwhcfagiuhbcnialhufasuhcfalsn"));
+      
+      let data2 = {
+        _id: hashDB2,
+        eth: eth,
+      };
+      insertOne(db, data2, "db2");
+      client.close();
+      res.redirect("/success");
+    }
   }
 });
 
